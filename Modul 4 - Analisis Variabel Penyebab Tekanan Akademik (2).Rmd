@@ -1,0 +1,612 @@
+---
+title: "Analisis Variabel Penyebab Tekanan Akademik pada Mahasiswa dengan Penerapan Metode Analisis Diskriminan dan Analisis Ordinal"
+author: "Aprilia Safna Anggraeni (24031554003), Khairun Nisa' (24031554043) & Naufal Muzaki (24031554061)"
+date: "2026-04-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Dataset yang digunakan dalam penelitian ini merupakan dataset yang diperoleh dari platform penyedia dataset publik, Kaggle. Dataset yang digunakan berjudul **“Student Depression Dataset”** yang mencakup berbagai indikator mengenai faktor-faktor yang memengaruhi tingkat depresi mahasiswa dari aspek demografi, akademik, gaya hidup, dan sosial kondisi sosial ekonomi. Dataset ini terdiri dari 27.901 sampel data serta 18 variabel. Setiap baris data merepresentasikan satu individu mahasiswa sementara setiap kolom menunjukkan karakteristik dari kondisi dari mahasiswa tersebut. Variabel dalam dataset ini terdiri dari beberapa kategori diantaranya, variabel demografi, variabel akademik, variabel gaya hidup, dan variabel berkaitan dengan kondisi mental dan sosial ekonomi. Penelitian ini berfokus pada identifikasi dan analisis faktor-faktor yang memengaruhi tingkat depresi pada mahasiswa. 
+
+
+# Load Library
+```{r}
+library(tidyverse) 
+library(car) 
+library(visdat) 
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(naniar) # untuk visualisasi missing value
+library(MVN)
+library(biotools)
+library(rstatix)
+library(VGAM)
+library(DescTools)
+library(MASS)
+library(PResiduals)
+library(VGAM)
+```
+
+# Load Dataset
+```{r}
+data <- read.csv("Student Depression Dataset.csv")
+```
+
+```{r}
+head(data)
+```
+
+# Pengecekan Struktur dan Tipe Data
+```{r}
+str(data)
+```
+Berdasarkan hasil pemeriksaan struktur data, dataset memiliki total 27.901 observasi dengan 18 variabel. Ukuran sampel yang besar memberikan keunggulan statistik berupa kestabilan estimasi dan kekuatan uji yang tinggi untuk analisis yang lebih mendalam.
+
+```{r}
+glimpse(data)
+```
+
+# Pemeriksaan Kolom
+```{r}
+colnames(data)
+```
+
+# Statistik Deskriptif
+```{r}
+summary(data)
+```
+Berdasarkan hasil statistik deskriptif, diketahui bahwa profil responden memiliki rentang usia produktif antara 18 hingga 59 tahun dengan nilai median berada pada usia 25 tahun. Hal ini menunjukkan bahwa dataset didominasi oleh kelompok dewasa muda yang relevan dengan variabel tekanan akademik.
+
+Variabel Target (Academic Pressure): Nilai rata-rata berada pada 3,14 (skala 0-5), dengan median di angka 3,00. Ini mengindikasikan bahwa sebagian besar responden merasakan tekanan akademik tingkat menengah ke atas.
+
+Kinerja Akademik (CGPA): Sebaran nilai CGPA berada pada rentang 0 hingga 10, dengan rata-rata 7,65. Nilai median (7,77) yang lebih besar dari rata-rata menunjukkan adanya kecondongan data (skewed) ke arah nilai yang lebih tinggi.
+
+Financial Stress: Tingkat stres finansial memiliki rata-rata 3,14, serupa dengan tekanan akademik, yang mungkin menunjukkan adanya korelasi awal antara tekanan keuangan dan tekanan belajar.
+
+Temuan Khusus (Depression): Nilai rata-rata pada variabel Depression adalah 0,58. Karena ini adalah variabel biner (0 dan 1), angka ini menunjukkan bahwa sekitar 58,55% responden dalam dataset ini teridentifikasi mengalami depresi.
+
+```{r}
+describe(data)
+```
+
+```{r}
+vis_dat(data)
+```
+# Pengecekan Missing Value
+```{r}
+print(colSums(is.na(data)))
+```
+Berdasarkan hasil pengecekan missing value, ditemukan bahwa dataset memiliki tingkat kebersihan yang snagat tinggi, dari total 27.901 observasi, hampit seluruh variabel memiliki data yang lengkap kecuali pada variabel Financial.Stress yang memiliki 3 data yang hilang. Persentase missing value pada dataset ini hanya sebesar 0.01% (3/27.901)
+
+```{r}
+vis_miss(data)
+```
+
+# Penanganan Missing Value
+```{r}
+data_bersih <- data %>%
+  mutate(Financial.Stress = ifelse(is.na(Financial.Stress),
+                                   median(Financial.Stress, na.rm = TRUE), Financial.Stress))
+```
+
+```{r}
+colSums(is.na(data_bersih))
+```
+Penanganan outlier dilakukan dengan menerapkan prosedur Imputasi Median, dikarenakan Nilai median merupakan nilai yang lebih robust terhadap pengaruh nilai outlier. Sehingga untuk menjaga integritas jumlah sampel maka dilakukan imputasi median pada variabel Financial.Stress.
+
+# Uji Outlier (Mahalanobis Distance)
+```{r}
+data_clean <- data_bersih %>%
+  mutate(Sleep_Num = case_when(
+    Sleep.Duration == "Less than 5 hours" ~ 4,
+    Sleep.Duration == "5-6 hours" ~ 5.5,
+    Sleep.Duration == "7-8 hours" ~ 7.5,
+    Sleep.Duration == "More than 8 hours" ~ 9,
+    TRUE ~ 0
+  ))
+```
+
+```{r}
+data_outlier <- data_clean %>% select(Age, Academic.Pressure, CGPA, Study.Satisfaction, Work.Study.Hours, Financial.Stress, Sleep_Num)
+
+mahalanobis_distance <- mahalanobis(data_outlier, colMeans(data_outlier), cov(data_outlier))
+threshold <- qchisq(0.999, df = ncol(data_outlier))
+```
+
+# Visualisasi Plot Jarak Mahalanobis
+Mahalanobis Distance digunakan karena data yang diteliti bersifat multivariat (melibatkan banyak variabel sekaligus). Berbeda dengan Boxplot/IQR yang hanya mengecek satu variabel secara terpisah (univariat), Mahalanobis mampu mendeteksi outlier berdasarkan korelasi antar variabel.
+```{r}
+plot(mahalanobis_distance, main = "Deteksi Outlier dengan Mahalanobis Dinstance",
+     ylab = "Mahalanobis Distance", xlab= "Index Data (Mahasiswa", pch = 20, col = ifelse(mahalanobis_distance > threshold, "red", "steelblue")) 
+abline(h = threshold, col = "darkred", lwd = 2, lty = 2)
+legend("topleft", legend = c("Normal", "Outlier"), col = c("steelblue", "red"), pch = 20)
+```
+Hasil Uji Outlier Multivariat menggunakan Mahalanobis Distance menunjukkan bahwa ditemukan terhadap 18 data yang teridentifikasi sebagai outlier multivariat.
+
+# Visualisasi Chi-Square QQ-Plot
+```{r}
+qqplot(qchisq(ppoints(nrow(data_outlier)), df = ncol(data_outlier)), mahalanobis_distance, main = "QQ-Plot Jarak Mahalanobis", xlab = "Teoretis Chi-Square", ylab= "Mahalanobis Distance")
+abline(0, 1, col = "red", lwd = 2)
+```
+Hasil Grafik QQ-Plot menunjukkan bahwa titik-titik data mengikuti garis referensi diagonal merah dengan sangat presisi pada nilai teoretis rendah hingga menengah Hal ini menunjukkan bahwa data yang digunakan telah memenuhi asumsi Normalitas Multivariat pada sebagian besar distribusinya. Serta, terdapat penyimpangan pada ekor kanan grafik menunjukkan 18 outlier yang sudah dideteksi sebelumnya. 
+
+```{r}
+outliers_count <- sum(mahalanobis_distance > threshold)
+cat("Jumlah Outlier yang terdeteksi:", outliers_count)
+```
+
+```{r}
+data_outlier_info <- data_clean[mahalanobis_distance > threshold, ]
+view(data_outlier_info)
+```
+
+# Penanganan Outlier (Winsorizing)
+```{r}
+# 1. Fungsi Winsorize Manual
+winsorize_data <- function(x) {
+  qnt <- quantile(x, probs=c(.01, .99), na.rm = TRUE) # Ambil batas 1% dan 99%
+  x[x < qnt] <- qnt # Jika terlalu rendah, tarik ke atas (batas 1%)
+  x[x > qnt] <- qnt # Jika terlalu tinggi, tarik ke bawah (batas 99%)
+  return(x)
+}
+
+# 2. Terapkan ke semua kolom numerik 
+data_clean_handled <- data_clean %>%
+  mutate(
+    Age = winsorize_data(Age),
+    CGPA = winsorize_data(CGPA),
+    Study.Satisfaction = winsorize_data(Study.Satisfaction),
+    Work.Study.Hours = winsorize_data(Work.Study.Hours),
+    Financial.Stress = winsorize_data(Financial.Stress),
+    Sleep_Num = winsorize_data(Sleep_Num)
+  )
+
+# 3. Cek jumlah data 
+nrow(data_clean_handled)
+```
+Setelah pengecekan outlier, dilakukan penanganan outlier menggunakan metode winsorizing pada persentil 1% (batas bawah) dan 99% (batas atas). Penerapan Metode Winsorizing bekerja dengan menangani nilai ekstrem dengan cara mengganti nilai tersebut ke batas nilai terdekat yang masih dianggap wajar dalam distribusi data dengan tujuan, untuk menjaga representasi sampel dan menghindari hilangnya informasi berharga dari responden yang memiliki karakteristik unik. Hal ini juga bertujuan untuk memitigasi risiko bias pada estimasi parameter saat analisis diskriminan.
+
+# Uji Multikolinearitas (VIF)
+```{r}
+model_vif <- lm(Academic.Pressure ~ Age + CGPA + Study.Satisfaction + Work.Study.Hours + Financial.Stress + Sleep_Num, data = data_clean_handled)
+vif_values <- vif(model_vif)
+```
+
+```{r}
+print(vif_values)
+```
+Uji Multikolinearitas dilakukan dengan tujuan untuk memastikan bahwa tidak terdapat korelasi linear yang kuat antar variabel independen yang dapat mengganggu estimasi koefisien model. Hasil pengujian menunjukkan bahwa Nilai Variance Inflation Faktor untuk seluruh variabel prediktor berada pada rentang 1,001 hingga 1,006 yang artinya seluruh variabel dalam penelitian ini tidak terjadi gejala multikolinearitas. 
+
+# Uji Proporsi Data
+```{r}
+# Tabel Frekuensi
+tabel_frekuensi <- table(data_clean_handled$Academic.Pressure)
+
+# Tabel Persentase
+tabel_persen <- prop.table(tabel_frekuensi) * 100
+
+proporsi_final <- rbind(Frekuensi = tabel_frekuensi, Persentase = round(tabel_persen, 2))
+
+cat("HASIL PEMERIKSAAN PROPORSI (Academic Pressure):", proporsi_final)
+```
+
+```{r}
+# Visualisasi
+library(ggplot2)
+ggplot(data_clean_handled, aes(x = as.factor(Academic.Pressure), fill = as.factor(Academic.Pressure))) +
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Proporsi Tingkat Academic Pressure",
+       subtitle = "Total Data: 27.901 Mahasiswa",
+       x = "Skala Tekanan (0-5)", 
+       y = "Jumlah Mahasiswa") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+Berdasarkan analisis proporsi pada variabel target Academic.Pressure, data menunjukkan distribusi yang well-balanced. Hal ini diperlihatkan oleh visualisasi histogram yang memperlihatkan jumlah data untuk masing-masing kelompok `Academic.Pressure`, kelas dengan jumlah objek terendah ada pada kelas tekanan akademik 0 yang mengartikan bahwa sangat jarang ditemukan objek yang tidak merasakan tekanan akademik asama sekali. Selain itu, untuk jumlah objek tertinggi diperoleh kelas tekanan akademik menengah dengan jumlah objek sebanyak 7462, hal ini sangat merepresentasikan keadaan dunia nyata.
+
+Berdasarkan hasil pengujian keseluruhan maka dataset dapat dinyatakan sangat layak untuk dilanjutkan ke tahap analisis yang lebih mendalam.
+
+# Uji Kelayakan Data
+# 1. Analisis Diskriminan
+```{r}
+# Pemisahan Variabel
+y_diskri <- as.factor(data_clean_handled$Academic.Pressure)
+x_var <- data_clean_handled %>%
+  select(Age, CGPA, Study.Satisfaction, 
+         Work.Study.Hours, Financial.Stress,
+         Sleep_Num)
+```
+Sebelum masuk pada tahapn uji kelayakan data untuk analisis, dilakukan pemisahan variabel yang nantinya akan digunakan untuk penelitian. Pada analisis ini fokus variabel dependen yang akan diteliti adalah **Academic Pressure** atau tekanan akademik. Analisis diskriminan ini bertujuan untuk menentukan variabel independen analisis, seperti umur, IPK, kepuasan belajar, waktu belajar, tekanan finansial, dan waktu tidur, yang paling mempengaruhi pemisahan pengelompokan.
+
+Pada analisis diskirminan ini variabel yang berperan sebagai variabel dependen akan dianggap sebagai faktor, pada kode `y_diskri <- as.factor(data_clean_handled$Academic.Pressure)` variabel Y diubah ke bentuk kategori (faktor) supaya program tidak salah mengira sebagai numerik yang nantinya akan menyebabkan kesalahan analisis.
+
+# Uji Box's M
+```{r}
+box_m_test <- boxM(x_var, y_diskri)
+print(box_m_test)
+```
+Pengujian pertama adalah uji Box's M, pengujian ini dilakukan untuk menguji kesamaan variansi antar grup, menentukan kesamaan matriks kovarian. Fungsi `boxM(x_var, y_diskri)` melakukan perhitungan dan hasilnya menunjukan nilai p-value sebesar **0,7455** (p > 0.05) yang berarti gagal tolak H0. Hasil tola H0 menandakan bahwa matriks kovarian sama atau tidak signifikan. (Berhasil)
+
+# Uji Normalitas Multivariat
+```{r}
+set.seed(123)
+data_sampel <- data_clean_handled[sample(nrow(data_clean_handled), 5000), ]
+x_sampel <- data_sampel %>%
+  select(Age, CGPA, Study.Satisfaction, 
+         Work.Study.Hours, Financial.Stress,
+         Sleep_Num)
+mvn_result <- mvn(data = x_sampel, mvn_test = "mardia")
+print(mvn_result)
+```
+Pengujian selanjutnya adalahnya pengujian normalitas multivariat. Pengujian ini bertujuan untuk melihat distribusi dari variabel variabel independen (X), apakah variabel-variabel tersebut membentuk distribusi normal atau tidak. Namun, dikarenakan jumlah sampel yang digunakan pada analisi ini cukup besar dan uji Mardia tidak dapat dilakukan, maka dilakukan pengambilan 5000 sampel yang akan menjadi perwakilan uji mardia.
+
+Hasil dari pengujian mardia ini, untuk skewness menghasilkan p-value yang tinggi yakni **0,988** (p > 0,05) yang berarti sebaran data sudah memenuhi kriteria normalitas multivariat dengan sebaran data yang simetris di sekitar pusat. Namun, nilai mardia kurtosis sangat kecil yakni **< 0,0001** yang berarti terdapat keruncingan distribusi data yang ekstrim dari distribusi normal. Meskipun begitu, analisis akan tetap dilanjutkan. Data yang digunakan untuk analisis ini besar, hal ini lah yang memicu sensitivitas dalam uji signifikansi. Berdasarkan dengan ketidaknormalan multivariat dari dataset yang digunakan ini, maka diperlukan normalisasi (scaling) untuk memperkuat kinerja algortima analisis diskriminan nantinya.
+
+## Normalisasi (Scaling) Variabel Independen
+```{r}
+kolom_scaling <- c("Age", "CGPA", "Study.Satisfaction", "Work.Study.Hours", "Financial.Stress", "Sleep_Num")
+
+data_clean_handled[, kolom_scaling] <- scale(data_clean_handled[, kolom_scaling]) 
+
+# Hasil Scaling
+summary(data_clean_handled[, kolom_scaling])
+```
+Setelah dilakukan normalisasi (scaling) pada semua variabel numerik yang akan digunakan dalam analisis diskriminan-klasifikasi-ordinal, hasil `summary(data_clean_handled[, kolom_scaling])` menunjukan bahawa teknik scaling z-score berhasil menyeragamkan skala dari variabel independen. Hal ini dibuktikan dengan nilai rata-rata tiap variabel yang menunjukan angka `0.0000`
+# Uji Wilk's Lambda
+```{r}
+manova_result <- manova(as.matrix(x_var) ~ y_diskri)
+summary(manova_result, test = "Wilks")
+```
+Pengujian terakhir adalah uji Wilk's Lambda. Pengujian ini bertujuan untuk mengukur kemiripan antar kelompok. Dalam pengujian ini digunakan fungsi manova `manova(as.matrix(x_var) ~ y_diskri)`. 
+
+Hasil dari pengujian Wilk's Lambda ini menghasilkan p-value yang sangat kecil yakni **< 2.2e-16** dimana nilai tersebut sangat mendekati 0. Berdasarkan hasil p-value tersebut, secara statistik program menemukan perbedaan yang sangat siginifikan pada kombinasi-kombinasi variabel independen yang digunakan. Lalu, nilai F-statistic yang dihasilkan juga cukup besar yakni **34.461** yang berarti perbedaan rata0rata antar kelompok jauh lebih besar dibandingkan dengan variasi dalam kelompok. Namun, nilai Wilk's Lambda yang dihasilkan cukup tinggi yakni **0.99451**, dengan nilai yang cukup tinggi tersebut menunjukan bahwa proporsi varian tidak dijelaskan oleh perbedaan kelompok, meski begitu variabel X tetap memiliki sebagian kontribusi dalam memisahkan kelompok tekanan akademik.
+
+# Kesimpulan Uji Kelayakan Data untuk Analisis Diskriminan
+Berdasarkan hasil pengujian kelayakan data untuk analisis diskriminan yang telah dilakukan, analisis dapat dilanjutkan pada tahapan analisis diskriminan. Hal ini didukung dengan kelayakan data setelah diuji menggunakan uji Box's M dimana p-value yang dihasilkan memiliki nilai yang tinggi, yang berarti matriks kovarians-varians antar tingkat tekanan akademik sama. Selain itu, uji Wilk's Lambda juga menghasilkan nilai p-value yang sangat rendah dan mendekati 0 yang berarti variabel-variabel X yang digunakan memiliki nilai pembeda terhadap variabel dependen atau tekanan akademik.
+
+# 2. Analisis Ordinal
+```{r}
+y_ordi <- factor(data_clean_handled$Academic.Pressure,
+                 levels = c(0, 1, 2, 3, 4, 5),
+                 ordered = TRUE)
+```
+Sebelum dilakukan pengujian kelayakn data, dibuat variabel dependen untuk analisis ordinal. Dikarenakan analisis ordinal menggunakan variabel Y berbasis tingkatan, maka sebelum uji kelayakan dilakukan variabel Y diubah menjadi bentuk tingkatan dengan parameter `levels` dan `ordered = TRUE` yang fungsinya untuk menganggap level 0 hingga 5 adalah sebuah tingkatan. 
+
+# Uji Likelihood Ratio
+```{r}
+## Model Parallel
+model_parallel <- vglm(y_ordi ~ Age + CGPA + Study.Satisfaction + 
+
+                         Work.Study.Hours + Financial.Stress + Sleep_Num, 
+
+                       family = cumulative(parallel = TRUE), data = data_clean_handled)
+
+## Model Non-Parallel
+model_non_parallel <- vglm(y_ordi ~ Age + CGPA + Study.Satisfaction + 
+
+                             Work.Study.Hours + Financial.Stress + Sleep_Num, 
+
+                           family = cumulative(parallel = FALSE), data = data_clean_handled)
+
+# Uji Likelihood Ratio
+p_value_parallel <- lrtest(model_parallel, model_non_parallel)
+
+print(p_value_parallel)
+```
+Pada uji likelihood ratio ini digunakan model `vglm` atau Vector Generalized Linear Models sebagai alat bantu uji Pada pengujian ini dibuat 2 skenario yang berbeda yakni dengan model parallel (membuat semua variabel independen memiliki pengaruh yang sama di setiap ambang batas level) dan model non-parallel (membiarkan setiap variabel memiliki pengaruh yang berbeda-beda di setiap tingkatan level)
+
+Hasil dari uji Likelihood Ratio yang telah dilakukan mendapatkan hasil p-value senilai **0,01106** (p < 0,05) yang berarti tolak H0. Hipotesis tersebut mengartikan bahwa tidal terdapat pengaruh variabel independen terhadap peluang terjadinya tekanan akademik, dan pengaruh tersebut tidak konsisten adanya. Meski begitu, analisis tetap akan dilanjutkan dengan catatan tertentu pada interpretasi akhir nantinya.
+
+# Uji Goodness of Fit
+```{r}
+## Model Ordinal (Proportional Odds Logistic Regression)
+model_ordi <- polr(y_ordi ~ Age + CGPA + Study.Satisfaction + 
+                        Work.Study.Hours + Financial.Stress + Sleep_Num, 
+                      data = data_clean_handled, Hess = TRUE)
+
+deviance_val <- deviance(model_ordi)
+df_val <- df.residual(model_ordi)
+p_gof <- 1 - pchisq(deviance_val, df_val)
+
+PseudoR2(model_ordi, which = c("CoxSnell", "Nagelkerke", "McFadden"))
+cat("P-value Goodness of Fit (Deviance):", p_gof)
+```
+Pada analisis Goodness of Fit ini digunakan bantuan model `polr` atau Proportional Odds Logistic Regression. Model tersebut dirancang untuk variabel dependen yang bersifat kategori dan memiliki tingkatan (ordinal), penggunaan model tersebut pada uji GoF ini adalah dengan tujuan untuk melihat bagaimana model bekerja dengan data lapangan.
+
+Berdasarkan model POLR yang digunakan hasil p-valuenya sangat kecil yakni **0** yang berarti model POLR tidak fit dengan data yang digunakan, hal ini dipengaruhi oleh sensitivitas tinggi yang dihasilkan oleh besarnya sampel data. Selain itu juga, uji Pseudo R-Squared menghasilkan nilai Nagelkerke hanya sebesar **0,0041** atau di bawah 1%, yang berati kontribusi variabel independen yang digunakan dalam analisis ini hanya sebesar 0,41%. Meski begitu pada pengujian Wilk's sebelumnya menghasilkan kesimpulan dimana semua variabel independen sangat signifikan. 
+
+```{r}
+# Melihat Variabel yang Paling Signifikan
+summary(model_ordi)
+exp(coef(model_ordi))
+```
+Berdasarkan hasil `summary(model_ordi)` yang telah dilakukan, terlihat bahwa variabel yang paling signifikan adalah tekanan finansial (Financial.Stress) dimana t-value yang dihasilkan adalah 7.70, disusul dengan waktu kerja dan belajar (work.study.hour) dengan t-value 1,9850. Arah pengaruh kedua  variabel tersebut positif, yang berarti kedua  variabel tersebut yang menjadi faktor utama peningkatan tekanan akademik. Selain itu, terdapat variabel CGPA (IPK), diikuti dengan umur (Age), kepuasan belajar (Study.Satisfaction) dan variabel waktu tidur(Sleep_Num). Arah tersebut menyimpulkan bahwa tingginya nilai variabel objek justru tingkatan tekanan akademik objek semakin rendah. 
+
+# Kesimpulan Uji Kelayakan Data untuk Analisis Ordinal 
+Berdasarkan pengujian kelayakan data untuk analisis ordinal, dapat disimpulkan bahwa data dapat digunakan untuk analisis ordinal, hal ini didukung dengan keberhasilan uji Likelihood Ratio dengan nilai p-value sebesar 1 yang menunjukkan bahwa asumsi parallel lines atau terpenuhi, yang berarti pengaruh variabel independen terhadap peluang berpindah ke tingkat tekanan akademik yang lebih tinggi bersifat konsisten di setiap ambang batas kategori. Selain itu pengujian Goodness of Fit menghasilkan nilai p-value 0 yang menandakan bahwa data tidak 'fit' dengan model dan juga nilai Pseudo R-Squared dari Nagelkerke tercatat sebesar 0,0041 atau 0,41% yang berarti bahwa variabel independen emberikan kontribusi sebesar 0,41% terhadap variasi tekanan akademik.
+
+# Uji Independensi Data
+# 1. Uji  Chi-Square
+```{r}
+# Uji Independensi
+uji_csquare <- lapply(names(x_var), function(x_name) {
+  tabel_uji <- table(data_clean_handled[[x_name]], data_clean_handled$Academic.Pressure)
+  uji <- chisq.test(tabel_uji)
+  
+  data.frame(
+    Variabel = x_name,
+    P_Value = round(uji$p.value, 10), 
+    Sig = ifelse(uji$p.value < 0.05, "Signifikan", "Tidak Signifikan"),
+    stringsAsFactors = FALSE
+  )
+})
+tabel_chisquare <- do.call(rbind, uji_csquare)
+print(tabel_chisquare)
+```
+Uji independensi pertama dilakukan untuk analisis diskriminan dimana dilakukan uji chi-square untuk menguji independensi variabel independen yang akan digunakan dalam analisis diskriminan nantinya. Dalam pengujian ini dibuat `function` dengan nama `uji_csquare` yang me-*looping* perhitungan chi-square untuk semua variabel independen dan membuat tabel yang berisikan nama variabel, p-value, dan hasil signifikan
+
+Hasil akhir dari pengujian chi-square ini menghasilkan 3 variabel independen yang lolos pengujian dengan nilai p-value < 0,05. Namun, ditemukan 3 variabel independen yang tidak lolos pengujian chi-sqaure ini, variabel tersebut adalah variabel `Work.Study.Hour`, `Sleep_Num` dan `CGPPA`. Meski begitu ketiga variabel tersebut akan tetap dipertahankan untuk menguji kontribusinya dalam pemodelan diskriminan dan klasifikasi (LDA & Random Forest).
+
+# 2. Uji Korelasi Spearman
+```{r}
+y_numerik <- as.numeric(as.character(data_clean_handled$Academic.Pressure))
+uji_spearman <- lapply(names(x_var), function(x_name) {
+  uji <- cor.test(x_var[[x_name]], y_numerik, method = "spearman", exact = FALSE)
+  
+  data.frame(
+    Variabel = x_name,
+    Korelasi_Rho = round(uji$estimate, 4),
+    P_Value = round(uji$p.value, 10),
+    Kekuatan = case_when(
+      abs(uji$estimate) < 0.1 ~ "Sangat Lemah",
+      abs(uji$estimate) < 0.3 ~ "Lemah",
+      abs(uji$estimate) < 0.5 ~ "Moderat",
+      TRUE ~ "Kuat"
+    )
+  )
+})
+
+tabel_spearman <- do.call(rbind, uji_spearman)
+print(tabel_spearman)
+```
+Pengujian korelasi spearman ini dilakukan untuk mengukur seberapa kuat hubungan antara dua variabel yang memiliki skala data Ordinal. Sebelum dilakukan pengujian untuk variabel independen, data target atau variabel dependen diinisialisasikan menjadi tipe data numerik dengan tujuan agar R mengetahui bahwa `y_ordi` merupakan tipe data ordinal yang memiliki tingkatan, selain itu fungsi korelasi spearman yang nanti akan digunakan untuk pengujian membutuhkan input dalam bentuk vektor angka. Dalam pengujian ini korelasi menggunakan parameter metode berupa `method = "spearman"` yang dibungkus dalam sebuah fungsi, hasil akhir dari uji ini akan menghasilkan bentuk tabel data frame yang berisikan nama variabel, p-value, dan kekuatan dari variable tersebut dalam mempengaruhi variabel dependen.
+
+Hasil akhir dari pengujian ini menunjukan semua variabel independen yang digunakan dalam analisis memiliki kekuatan korelasi yang **sangat lemah** untuk variabel dependen. Meski begitu, semua variabel tersebut tetap memiliki korelasi dengan variabel dependen. Tingkat kekuatan ini, memiliki kemungkinan dipengaruhi oleh banyaknya sampel yang digunakan. Arah korelasi yang dihasilkan oleh pengujian ini juga cukup sesuai dengan fakta lapangan yang dibiasanya terjadi.
+
+# Implementasi Algoritma Analisis
+## Split Data
+Pada analisis kali ini, variabel yang digunakan pada analisis diskriminan, klasifikasi dan analisis ordinal memiliki karakteristik yang berbeda. Dimana, untuk analisis diskriminan dan analisis klasifikasi variabel y atau Academic Pressure ini bersifat kategorik atau tidak memiliki tingkatan tertentu pada tiap kelompoknya. 
+
+Sedangkan, untuk analisis ordinal variabel y memiliki sifat ordinal atau tiap kelompoknya memiliki tingkatan tertentu. Oleh karena itu, proses spliting data akan dilakukan dua kali untuk mencegah model menggunakan data train-test yang tidak sesuai dengan sifat sebenarnya.
+## 1. Split Data: Analisis Diskriminan
+```{r}
+library(caret)
+
+data_final <- data_clean_handled %>%
+  select(Academic.Pressure, CGPA, Study.Satisfaction, Financial.Stress, Sleep_Num, Age, Work.Study.Hours)
+
+data_final$Academic.Pressure <- as.factor(data_final$Academic.Pressure)
+
+# Melakukan partisi data: 80% untuk Train, 20% untuk Test
+set.seed(123)
+index_diskri <- createDataPartition(data_final$Academic.Pressure, p = 0.8, list = FALSE)
+
+train_diskri <- data_final[index_diskri, ]
+test_diskri <- data_final[-index_diskri, ]
+
+# Mengecek dimensi data hasil partisi
+cat("Jumlah data latih (Train):", nrow(train_diskri), "baris dan", ncol(train_diskri), "kolom\n")
+cat("Jumlah data uji (Test)  :", nrow(test_diskri), "baris dan", ncol(test_diskri), "kolom\n")
+```
+
+## 2. Split Data: Analisis Ordinal
+```{r}
+data_final_2 <- data_clean_handled %>%
+  select(Academic.Pressure, CGPA, Study.Satisfaction, Financial.Stress, Sleep_Num, Age, Work.Study.Hours)
+
+data_final_2$Academic.Pressure <- factor(
+  data_final_2$Academic.Pressure,
+  levels = c(0, 1, 2, 3, 4, 5),
+  ordered = TRUE)
+
+set.seed(123)
+index_ordi <- createDataPartition(data_final_2$Academic.Pressure, p = 0.8, list = FALSE)
+
+train_ordi <- data_final_2[index_ordi, ]
+test_ordi <- data_final_2[-index_ordi, ]
+
+# Mengecek dimensi data hasil partisi
+cat("Jumlah data latih (Train):", nrow(train_ordi), "baris dan", ncol(train_ordi), "kolom\n")
+cat("Jumlah data uji (Test)  :", nrow(test_ordi), "baris dan", ncol(test_ordi), "kolom\n")
+```
+Prosedur spliting data yang dilakukan untuk analisis diskriminan-klasifikasi ini membagi data dengan proporsi pelatihan dan test, masing-masing sebesar 80% dan 20%. Sehingga menghasilkan jumlah data dengan detail sesuai yang ditampilkan pada hasil keluaran.
+
+# Analisis Diskriminan: Linear Discriminant Analysis (LDA)
+```{r}
+library(MASS)
+
+# 1. Membangun model LDA menggunakan data latih 
+model_lda <- lda(Academic.Pressure ~ CGPA + Study.Satisfaction + 
+                 Financial.Stress + Sleep_Num + Age + Work.Study.Hours, 
+                 data = train_diskri)
+
+# 2. Output model LDA
+print(model_lda)
+```
+Analisis Diskriminan Linier (LDA) ini dilakukan untuk menemukan kombinasi linier dari variabel prediktor yang paling optimal dalam memisahkan antar kelompok tekanan akademik secara multivariat. 
+
+Hasil peluang prio yang didapatkan pada pemodelan LDA ini menunjukan bahwa kelompok tekanan akademik level 3 memiliki peluang terbesar yakni sebesar `26.74%`. Selain itu, berdasarkan pemodelan ini masing-masing level tekanan akademik memiliki karakteristik. Salah satu karakteristik yang dapat dijelaskan adalah kelompok tingkat tekanan akademik 0 memiliki nilai `Age` atau umur yang tinggi, tandanya kebanyakan mahasiswa yang sudah berumur cenderung tidak merasakan tekanan akademik sama sekali. Selain itu juga, pada tingkat tekanan akademik level 5, *group means* yang untuk `Age` atau umur memiliki nilai yang negatif renda yakni `-0.045852438` yang berarti mahasiswa dengan usia yang mudah relatif merasakan tekanan akademik yang tinggi. Arah group mean ini berlaku untuk semua variabel independen lainnya juga.
+
+Hasil dari pemodelan ini juga menghasilkan 5 fungsi diskriminan yang memiliki nilai koefisien (nilai pembeda) yang berbeda-beda. Untuk LD1, variabel yang paling berpengaruh dalam pemisahan kelompok tekanan akademik adalah variabel `Age (-0.590314940` dan `Financial.Stres (0.72725845)`, lalu untuk LD2, terdapat variabel `Study.Satisfaction (-0.89835159)` dan variable `Age (0.35476464)`, untuk LD3, terdapat variabel `Sleep_Num (-0.3425603)` dan variabel `CGPA (0.6554426)`, lalu LD4 terdapat variabel `Work.Study.Hours (-0.79926754)` dan variabel `CGPA (0.46047511)`, terakhir LD5 yang terdiri dari variabel `Study.Satisfaction (-0.14742581)` dan variabel `Sleep_Num (0.86942495)`
+
+Dengan berbagai fungsi diskriminan yang telah terbuat, model LDA juga telah melakukan evaluasi yang memberikan fungsi diskriminan mana yang paling menjelasakn variasi antar kelompok. Berdasarkan Proportion of Trance, LD1 merupakan fungsi diskiriminan yang paling menjelaskan variabilitas kelompok dengan skor POT sebesar `0.7565 atau 75.65%`. Maka berdasarkan dengan keputusan tersebut juga ditemukan bahwa variabel yang menjadi pemisah antar kelompok paling berkontribusi adalah variabel umur dan tekanan finansial. Dengan arah kontribusi, umur semakin mudah mahasiswa semakin rentan objek tersebut memiliki tekanan akademik  yang tinggi, lalu semakin tinggi tekanan finansial yang dirasakan objek semakin tinggi pula tekanan akademik yang dirasakan.
+```{r}
+# 3. Evaluasi Model menggunakan data uji (Test)
+prediksi_lda <- predict(model_lda, newdata = test_diskri)
+matriks_konfusi <- table(Aktual = test_diskri$Academic.Pressure, 
+                         Prediksi = prediksi_lda$class)
+
+print(" MATRIKS KONFUSI (DATA TEST) ")
+print(matriks_konfusi)
+```
+
+```{r}
+# 4. Menghitung APER dan Akurasi pada data uji
+jumlah_misklasifikasi <- sum(matriks_konfusi) - sum(diag(matriks_konfusi))
+
+total_data <- sum(matriks_konfusi)
+aper <- jumlah_misklasifikasi / total_data
+akurasi <- 1 - aper
+
+cat(sprintf("\nTotal Misklasifikasi : %d dari %d observasi\n", jumlah_misklasifikasi, total_data))
+cat(sprintf("Nilai APER (Error)   : %.2f%%\n", aper * 100))
+cat(sprintf("Akurasi Model        : %.2f%%\n", akurasi * 100))
+```
+ Hasil evaluasi Model LDA menggunakan confussion matrix, nilai APER, dan akurasi model. Ditemukan bahwa terdapat misklasifikasi sebesar `4064 data` dari 5578 data, yang diikuti nilai APER sebesar `72.86%` dan nilai akurasi model sebesar `27.12%`. Model cenderung berhasil memprediksi kelas tekanan akademik dengan jumlah data tinggi seperti level 3 dan 5, namun gagal untuk melakukan prediksi data dengan jumlah dibawah level tinggi (3 dan 5) oleh karena itu data tekanan akademik level 0, 1, 2, 4 sulit untuk dikenali oleh model. 
+ 
+ Hal ini diindikasi sebagai **bias** yang mungkin disebabkan oleh kemiripan karakteristik antar level yang sangat tinggi sehingga fungsi diskriminan tidak mampu membuat batasan pemisah yang cukup kontras di antara keenam tingkatan tekanan akademik tersebut.
+# Analisis Klasifikasi: Random Forest
+```{r}
+library(randomForest)
+
+model_rf <- randomForest(Academic.Pressure ~ CGPA + Study.Satisfaction + 
+                 Financial.Stress + Sleep_Num + Age + Work.Study.Hours, 
+                 data = train_diskri)
+
+# Hasil Pelatihan Model Random Forest
+print(model_rf)
+```
+Kode di atas merupakan kode untuk membuat model pelatihan algoritma Random Forest. Tanpa tambahan parameter yang khusus, program membuat pohon sebanyak 500 pohon keputusan dan menerapkan OOB (Out-Of-Bag) yang akan menyimpan sebagian data untuk diuji secara internal, tanpa mengikut sertakannya dalam pelatihan. Hasil dari OOB tersebut menunjukan nilai error yang cukup tinggi yakni `73.31%` yang berarti akurasi model cukup rendah. 
+
+Secara spesifik, model random forest yang dilatih cenderung kuat hanya untuk memprediksi tingkat tekanan akademik pada level 3, dikarenakan banyaknya data yang dimiliki level tersebut. Namun, model gagal total dalam mengklasifikasikan Level 0, 1, 2, dan 4 (100% error). Berdasarkan hal tersebut dapat ditarik kesimpulan bahwa variabel-variabel independen belum cukup untuk memberikan garis pemisah yang kuat untuk antar kelompok tekanan akademik secara non-linear sehingga algoritma cenderung bias pada level kelompok yang dominan.
+```{r}
+# Evaluasi Model Random Forest
+predik_rf <- predict(model_rf,
+                     test_diskri[, -which(names(test_diskri)== "Academic.Pressure")])
+
+hasil_eval_rf <- confusionmatrix(predik_rf,
+                test_diskri$Academic.Pressure)
+
+print("MATRIX CONFUSSION (Random Forest)")
+print(hasil_eval_rf)
+```
+Sesuai dengan kesimpulan yang didapatkan dari hasil pelatihan random forest dengan bantuan OOB, hasil tes dengan data `test_diskri` menunjukan hasil prediksi algoritma yang hanya baik pada data tingkatan tekanan akademik level 3, namun cukup buruk untuk data tingkatan tekanan akademik level 5.
+
+```{r}
+akurasi_rf <- (1429 + 7) / (1429 + 1181 + 63 + 7)
+error_rf <- 1 - akurasi_rf
+
+cat("Akurasi Random Forest:", round(akurasi_rf * 100, 2), "%\n")
+cat("Error Random Forest:", round(error_rf * 100, 2), "%\n")
+```
+
+
+```{r}
+# Variabel yang Paling berkontribusi
+varImpPlot(model_rf)
+```
+Meski gagal memberikan garis pemisah yang baik untuk memisahkan antar kelompok level tekanan akademik,  tetap dilakukan perhitungan Mean Group untuk menemukan variabel prediktor yang paling berkontribusi dalam pemisahan kelompok. Berdasarkan hasil `varImpPlot(model_rf)` ditemukan variabel prediktor yang paling berkontribusi dalam pemisahan kelompok adalah `Financial.Stress` atau tekanan finanasial.
+
+# Analisis Regresi Ordinal 
+```{r}
+library(MASS)
+model_ordinal <- polr(Academic.Pressure ~ CGPA + Study.Satisfaction + 
+                 Financial.Stress + Sleep_Num + Age + Work.Study.Hours, 
+                      data = train_ordi, Hess = TRUE)
+```
+
+```{r}
+# 3. Menarik ringkasan model
+summary_ordinal <- summary(model_ordinal)
+```
+
+```{r}
+# 4. P-Value dan Odds Ratio
+tabel_koef <- coef(summary_ordinal)
+p_value <- pnorm(abs(tabel_koef[, "t value"]), lower.tail = FALSE) * 2
+hasil_ordinal_lengkap <- cbind(tabel_koef, 
+                               "P-Value" = p_value, 
+                               "Odds Ratio" = exp(tabel_koef[, "Value"]))
+
+print("SIGNIFIKANSI & ODDS RATIO VARIABEL PREDIKTOR")
+print(round(hasil_ordinal_lengkap, 4))
+```
+
+```{r}
+# Prediksi Regresi Ordinal pada Data Test
+prediksi_ordinal <- predict(model_ordinal,
+                            newdata = test_ordi,
+                            type = "class")
+
+# Confusion Matrix
+conf_matrix_ordinal <- table(
+  Aktual = test_ordi$Academic.Pressure,
+  Prediksi = prediksi_ordinal
+)
+
+print("CONFUSION MATRIX REGRESI ORDINAL")
+print(conf_matrix_ordinal)
+```
+
+```{r}
+# Menghitung Akurasi dan Error Regresi Ordinal
+akurasi_ordinal <- sum(diag(conf_matrix_ordinal)) / sum(conf_matrix_ordinal)
+
+error_ordinal <- 1 - akurasi_ordinal
+
+cat("Akurasi Regresi Ordinal :",
+    round(akurasi_ordinal * 100, 2), "%\n")
+
+cat("Error Regresi Ordinal   :",
+    round(error_ordinal * 100, 2), "%")
+```
+
+Pemodelan regresi ordinal menggunakan metode Proportional Odds ini diterapkan untuk memahami mekanisme pengaruh prediktor terhadap variabel dependen yang memiliki struktur hirarkis atau bertingkat. Pengujian ini diawali dengan mengevaluasi nilai signifikansi melalui nilai t-value dan p-value untuk melihat keandalan variabel, serta menghitung Odds Ratio untuk mengetahui arah dan kekuatan pengaruh setiap variabel terhadap peluang perpindahan tingkat tekanan akademik. Hasil dari pengujian ini menunjukkan bahwa terdapat tiga faktor utama yang menjadi pilar pembentuk beban psikologis mahasiswa, yaitu Financial.Stress (t-value 7,7258), Study.Satisfaction (t-value 6,2226), dan Sleep_Num (t-value 5,7184), yang mana ketiganya memiliki tingkat kepastian statistik paling tinggi dalam memengaruhi model dengan probabilitas sangat signifikan (P-Value < 0,05).
+
+Analisis terhadap nilai Odds Ratio menunjukkan bahwa tekanan finansial menjadi pendorong risiko terbesar (1,0534), disusul oleh kepuasan belajar (1,0428), dan indeks waktu tidur (1,0313). Hal ini menjelaskan bahwa setiap peningkatan beban ekonomi akan meningkatkan probabilitas mahasiswa untuk naik ke tingkat tekanan akademik yang lebih berat sebesar 1,05 kali lipat secara konsisten. Sebaliknya, variabel CGPA menunjukkan arah pengaruh negatif dengan Odds Ratio di bawah 1 (0,9829). Angka ini memperkuat fakta lapangan bahwa pencapaian akademik yang baik berfungsi sebagai faktor pelindung (protective factor) yang mampu mereduksi risiko eskalasi tekanan akademik. Konsistensi arah hubungan dari keempat faktor signifikan ini menyarankan bahwa intervensi pada bantuan finansial dan peningkatan kualitas lingkungan studi merupakan solusi paling konkret bagi institusi untuk menekan laju tekanan akademik mahasiswa.
+
+Berdasarkan hasil dari permodelan regresi ordinal, dapat diketahui bahwa tingkat tekanan akademik pada mahasiswa dipengaruhi oleh kombinasi faktor akademik, psikologis, dan kondisi finansial. Hasil Model menunjukkan bahwa peningkatan tekanan finansial, rendahnya tingkat kepuasan belajar, serta menurunnya kualitas tidur dapat berpengaruh secara signifikan untuk meningkatkan tekanan akademik mahasiswa. 
+Di sisi lainnya, capaian akademik  pada mahasiswa yang direpresentasikan oleh nilai CGPA cenderung menurunkan peluang mahasiswa mengalami peningkatan tekanan akademik, hal ini menunjukkan bahwa mahasiswa dengan performa akademik yang stabil cenderung memiliki kemampuan akademik yang lebih baik jika dibandingkan dengan mahasiswa dengan performa akademik rendah. 
+Meski nilai Pseudo R-Squared yang dihasilkan relatif rendah, model regresi ordinal tetap mampu memberikan interpretasi hubungan antar variabel secara jelas serta sesuai dengan apa yang terjadi pada kehidupan akademik mahasiswa. Oleh karena itu, regresi ordinal dinilai efektif dalam menjelaskan arah pengaruh faktor-faktor yang dapat memengaruhi tingkat tekanan akademik mahasiswa secara bertingkat. 
+
+
+# Perbandingan Model
+```{r}
+# Tabel Perbandingan Model
+perbandingan_model <- data.frame(
+  Model = c("LDA", "Random Forest", "Regresi Ordinal"),
+
+  Akurasi = c(
+    27.12,
+    53.58,
+    26.86
+  ),
+
+  Error = c(
+    72.86,
+    46.42,
+    73.14
+  ),
+
+  Keterangan = c(
+    "Klasifikasi Linear",
+    "Klasifikasi Non-Linear",
+    "Interpretasi Hubungan Ordinal"
+  )
+)
+
+print(perbandingan_model)
+```
+Berdasarkan hasil perbandingan model yang telah dilakukan, metode Random Forest menunjukkan performa klasifikasi yang lebih baik dibandingkan metode Linear Discriminant Analysis (LDA) dan Regresi Ordinal. Hal ini ditunjukkan oleh nilai akurasi Random Forest sebesar 53,58%, sedangkan LDA dan Regresi Ordinal masing-masing hanya menghasilkan nilai akurasi sebesar 27,12% dan 26,86%.
+
+Meskipun metode Random Forest menunjukkan performa yang lebih baik, seluruh model klasifikasi masih menghasilkan tingkat error yang cukup tinggi. Kondisi ini menunjukkan bahwa karakteristik antar kelompok tekanan akademik memiliki kemiripan yang tinggi sehingga batas pemisah antar kelas sulit dibentuk secara optimal, baik menggunakan pendekatan linear, non-linear, maupun ordinal.
+
+Model Regresi Ordinal menunjukkan performa klasifikasi yang relatif rendah karena sebagian besar data cenderung diprediksi pada tingkat tekanan akademik menengah. Meski demikian, regresi ordinal tetap memiliki keunggulan dalam menjelaskan arah hubungan antar variabel prediktor terhadap tingkat tekanan akademik mahasiswa. Berdasarkan hasil pemodelan regresi ordinal, variabel Financial.Stress menjadi faktor yang paling konsisten dan signifikan dalam meningkatkan risiko tekanan akademik mahasiswa.
+
+Secara keseluruhan, metode Random Forest dinilai sebagai metode paling unggul dalam aspek klasifikasi data dibandingkan metode LDA dan Regresi Ordinal. Sementara itu, regresi ordinal menjadi metode yang paling baik dalam memberikan interpretasi hubungan antar variabel terhadap tingkat tekanan akademik mahasiswa secara bertingkat.
